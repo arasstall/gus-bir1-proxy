@@ -1,11 +1,25 @@
-# GUS BIR1 Proxy
+# 🇵🇱 GUS BIR1 Proxy
 
-Serwer pośredniczący (proxy) wystawiający proste **REST/JSON** API na wierzchu
-SOAP-owego **API GUS BIR1** (wyszukiwarka podmiotów REGON). Ukrywa logowanie,
-zarządzanie sesją (sid) i WS-Addressing. Gotowy do uruchomienia w Dockerze.
+> Lekki serwer pośredniczący, który zamienia toporne, SOAP-owe **API GUS BIR1**
+> (wyszukiwarka REGON) w wygodne **REST/JSON + CSV**. Odpytujesz firmę po
+> NIP / REGON / KRS i dostajesz gotowe dane wraz z **datami** i **statusem
+> działalności** — bez grzebania w SOAP, WS-Addressing i sesjach.
 
-Pod spodem wykorzystuje bibliotekę [`RegonAPI`](https://pypi.org/project/RegonAPI/)
-oraz FastAPI.
+Ukrywa całą złożoność GUS: logowanie kluczem, zarządzanie sesją (`sid`),
+WS-Addressing i dobór właściwego raportu wg typu podmiotu. Zbudowany na
+**FastAPI** + [`RegonAPI`](https://pypi.org/project/RegonAPI/), gotowy pod
+**Docker** i **Synology Container Manager**.
+
+### Co potrafi
+- 🔎 **Wyszukiwanie** po NIP / REGON / KRS (pojedynczo i wsadowo)
+- 🏢 **Ujednolicone dane** podmiotu (nazwa, adres, typ) niezależnie od tego,
+  czy to osoba fizyczna czy prawna
+- 📅 **Daty działalności**: powstanie, rozpoczęcie, zawieszenie, wznowienie,
+  zakończenie, skreślenie z REGON
+- 🚦 **Status**: `aktywna` / `zawieszona` / `zamknieta` — idealne do CRM
+- 📊 **Eksport CSV** do Excela / Power Query (odświeżalne połączenie)
+- 🖥️ Proste **GUI** w przeglądarce + interaktywny Swagger (`/docs`)
+- 🔐 Ochrona nagłówkiem **`X-API-Key`**, gotowy pod reverse proxy z HTTPS
 
 ## Szybki start (Docker)
 
