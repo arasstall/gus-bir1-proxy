@@ -138,3 +138,8 @@ po stronie GUS.
   dużo odpytań.
 - Nazwy pól z datami warto potwierdzić „na żywo"
   (`/entity/nip/<nip>?raw=true`) przy pierwszym uruchomieniu na danej wersji.
+
+## Licencja
+
+[MIT](LICENSE) — możesz swobodnie używać, modyfikować i rozpowszechniać, bez
+gwarancji.
