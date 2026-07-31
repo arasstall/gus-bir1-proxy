@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GUS BIR1 Proxy</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         margin: 0; padding: 2rem 1rem; background: #f4f5f7; color: #1c1e21; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #17181c; color: #e6e6e6; }
+    .card { background: #22242a !important; border-color: #33353c !important; }
+    input, select { background: #191a1f; color: #e6e6e6; border-color: #3a3c44; }
+    th { background: #2a2c33 !important; }
+    tr:nth-child(even) td { background: #1e2025; }
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  p.sub { margin: 0 0 1.5rem; opacity: .7; font-size: .9rem; }
+  .card { background: #fff; border: 1px solid #e2e4e8; border-radius: 12px;
+          padding: 1.25rem; margin-bottom: 1.25rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; }
+  .field { display: flex; flex-direction: column; gap: .3rem; }
+  label { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+  input, select { padding: .55rem .6rem; border: 1px solid #cfd2d8; border-radius: 8px;
+                  font-size: .95rem; }
+  input[type=text] { min-width: 200px; }
+  button { padding: .6rem 1rem; border: 0; border-radius: 8px; cursor: pointer;
+           font-size: .9rem; font-weight: 600; }
+  .primary { background: #2f6fed; color: #fff; }
+  .ghost { background: transparent; border: 1px solid #cfd2d8; color: inherit; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #e6e8ec;
+           vertical-align: top; }
+  th { background: #f0f2f5; width: 40%; font-weight: 600; }
+  .muted { opacity: .45; }
+  .err { color: #c0392b; }
+  .overflow { overflow-x: auto; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GUS BIR1 — proxy REGON</h1>
+  <p class="sub">Wyszukiwarka podmiotów z ujednoliconymi datami działalności (rozpoczęcie / zawieszenie / wznowienie / zakończenie).</p>
+
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label for="type">Identyfikator</label>
+        <select id="type">
+          <option value="nip">NIP</option>
+          <option value="regon">REGON</option>
+          <option value="krs">KRS</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1;">
+        <label for="value">Wartość</label>
+        <input id="value" type="text" placeholder="np. 5261040828" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="apikey">X-API-Key</label>
+        <input id="apikey" type="password" placeholder="jeśli wymagany" autocomplete="off" />
+      </div>
+      <button class="primary" id="searchBtn">Szukaj</button>
+      <button class="ghost" id="csvBtn" disabled>Pobierz CSV</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="resultCard">
+    <div id="status"></div>
+    <div class="overflow"><table id="resultTable"></table></div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let lastQuery = null;
+
+  function apiHeaders() {
+    const key = $("apikey").value.trim();
+    return key ? { "X-API-Key": key } : {};
+  }
+
+  function renderTable(obj) {
+    const table = $("resultTable");
+    table.innerHTML = "";
+    for (const [k, v] of Object.entries(obj)) {
+      if (k.startsWith("_")) continue;
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      th.textContent = k;
+      const td = document.createElement("td");
+      if (v === null || v === "" ) { td.innerHTML = '<span class="muted">—</span>'; }
+      else { td.textContent = v; }
+      tr.append(th, td);
+      table.append(tr);
+    }
+  }
+
+  async function doSearch() {
+    const type = $("type").value;
+    const value = $("value").value.trim();
+    if (!value) { return; }
+    $("resultCard").classList.remove("hidden");
+    $("status").textContent = "Szukam…";
+    $("resultTable").innerHTML = "";
+    $("csvBtn").disabled = true;
+    lastQuery = { type, value };
+    try {
+      const res = await fetch(`entity/${type}/${encodeURIComponent(value)}`, { headers: apiHeaders() });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        $("status").innerHTML = `<span class="err">Błąd ${res.status}: ${body.detail || res.statusText}</span>`;
+        return;
+      }
+      const data = await res.json();
+      $("status").textContent = "";
+      renderTable(data);
+      $("csvBtn").disabled = false;
+    } catch (e) {
+      $("status").innerHTML = `<span class="err">Błąd połączenia: ${e.message}</span>`;
+    }
+  }
+
+  async function downloadCsv() {
+    if (!lastQuery) return;
+    const { type, value } = lastQuery;
+    try {
+      const res = await fetch(`entity/${type}/${encodeURIComponent(value)}?format=csv`, { headers: apiHeaders() });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `gus_${type}_${value}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* ignore */ }
+  }
+
+  $("searchBtn").addEventListener("click", doSearch);
+  $("csvBtn").addEventListener("click", downloadCsv);
+  $("value").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+</script>
+</body>
+</html>

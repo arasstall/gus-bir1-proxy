@@ -1,0 +1,18 @@
+services:
+  gus-proxy:
+    build: .
+    image: gus-bir1-proxy:latest
+    container_name: gus-bir1-proxy
+    restart: unless-stopped
+    ports:
+      # Dostęp z całej sieci LAN pod http://IP_NAS-a:8000 (oraz z NAS-a przez localhost).
+      # Ruch z internetu i tak przechodzi przez Synology Reverse Proxy (HTTPS).
+      - "8000:8000"
+    environment:
+      # Klucz użytkownika GUS. Dla testów: abcde12345abcde12345
+      GUS_API_KEY: ${GUS_API_KEY:-abcde12345abcde12345}
+      # false = środowisko testowe, true = produkcja
+      GUS_PRODUCTION: ${GUS_PRODUCTION:-false}
+      GUS_BIR_VERSION: ${GUS_BIR_VERSION:-bir1.1}
+      # Opcjonalna ochrona proxy nagłówkiem X-API-Key
+      GUS_PROXY_API_KEY: ${GUS_PROXY_API_KEY:-}

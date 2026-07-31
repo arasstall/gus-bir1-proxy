@@ -1,0 +1,17 @@
+# Sekrety — NIGDY nie commitować
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Systemowe / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
