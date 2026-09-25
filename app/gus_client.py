@@ -4,18 +4,43 @@ API GUS BIR wymaga sesji: najpierw `Zaloguj` (zwraca sid ważny ~60 min),
 potem kolejne wywołania z tym sid. Ta klasa trzyma jedną sesję i loguje się
 ponownie, gdy sesja wygaśnie.
 
+Dwie pułapki GUS, które trzeba tu obsłużyć:
+
+1. Po wygaśnięciu sesji `searchData` **nie rzuca wyjątku** — zwraca `None`,
+   dokładnie tak samo jak przy nieistniejącym podmiocie. Samo ponawianie po
+   wyjątku więc nie wystarcza; pusty wynik dodatkowo weryfikujemy pytając GUS
+   o `StatusSesji` i dopiero pustka na świeżej sesji znaczy "nie ma podmiotu".
+
+2. Gdy podmiotu nie ma, GUS **nie zwraca pustki**, tylko rekord z `ErrorCode`
+   ("Nie znaleziono podmiotu..."). Nieodfiltrowany udaje znaleziony podmiot bez
+   żadnych dat, a taki wychodzi z `compute_status` jako "aktywna".
+
 Używa wyłącznie metod potwierdzonych w dokumentacji RegonAPI:
 authenticate(), searchData(), dataDownloadFullReport().
 """
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any
 
 from RegonAPI import RegonAPI
+from RegonAPI.exceptions import ApiError
 
 from .config import Settings
 from .reports import flatten_entity, get_ci, pick_report_name
+
+# GUS unieważnia sid po ok. 60 min — odświeżamy z zapasem, zanim zdąży wygasnąć.
+SESSION_MAX_AGE_SECONDS = 30 * 60
+
+# Wyjątki RegonAPI dziedziczą po BaseException, więc samo `except Exception`
+# by ich nie złapało.
+CALL_ERRORS = (Exception, ApiError)
+
+
+def drop_error_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Odsiewa rekordy-błędy GUS (te z `ErrorCode`), żeby nie udawały danych."""
+    return [row for row in (rows or []) if not get_ci(row, "errorcode")]
 
 
 class GusClient:
@@ -23,6 +48,7 @@ class GusClient:
         self._settings = settings
         self._lock = threading.Lock()
         self._api: RegonAPI | None = None
+        self._authenticated_at = 0.0
 
     def _build(self) -> RegonAPI:
         api = RegonAPI(
@@ -34,26 +60,47 @@ class GusClient:
         api.authenticate(key=self._settings.api_key)
         return api
 
-    def _get_api(self) -> RegonAPI:
+    def _get_api(self, *, force_new: bool = False) -> RegonAPI:
         with self._lock:
-            if self._api is None:
+            too_old = (
+                time.monotonic() - self._authenticated_at >= SESSION_MAX_AGE_SECONDS
+            )
+            if force_new or self._api is None or too_old:
                 self._api = self._build()
+                self._authenticated_at = time.monotonic()
             return self._api
 
-    def _reset(self) -> None:
-        with self._lock:
-            self._api = None
+    def _session_alive(self) -> bool:
+        """Pyta GUS wprost o stan sesji: "1" = żywa, "0" = wygasła."""
+        api = self._api
+        if api is None:
+            return False
+        try:
+            value = api.service.GetValue(pNazwaParametru="StatusSesji")
+        except CALL_ERRORS:
+            return False
+        return str(value).strip() == "1"
 
     def _call(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        """Wywołuje metodę RegonAPI; przy błędzie (np. wygasła sesja) loguje się
-        ponownie i ponawia raz."""
+        """Wywołuje metodę RegonAPI; przy błędzie (np. zerwane połączenie)
+        loguje się ponownie i ponawia raz."""
         try:
             api = self._get_api()
             return getattr(api, method_name)(*args, **kwargs)
-        except Exception:  # noqa: BLE001 - ponów raz po ponownym zalogowaniu
-            self._reset()
-            api = self._get_api()
+        except CALL_ERRORS:
+            api = self._get_api(force_new=True)
             return getattr(api, method_name)(*args, **kwargs)
+
+    def _call_checked(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Jak `_call`, ale pusty wynik traktuje jako podejrzany — GUS zwraca
+        `None` zarówno gdy podmiotu nie ma, jak i gdy sesja wygasła. Dopytujemy
+        o stan sesji i tylko gdy jest martwa, logujemy się ponownie i ponawiamy.
+        Dzięki temu realne "nie znaleziono" nie kosztuje dodatkowego logowania."""
+        result = self._call(method_name, *args, **kwargs)
+        if not result and not self._session_alive():
+            self._get_api(force_new=True)
+            result = self._call(method_name, *args, **kwargs)
+        return result
 
     # --- Publiczne operacje ---
 
@@ -64,11 +111,14 @@ class GusClient:
         regon: str | None = None,
         krs: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self._call("searchData", nip=nip, regon=regon, krs=krs) or []
+        rows = self._call_checked("searchData", nip=nip, regon=regon, krs=krs)
+        return drop_error_rows(rows)
 
     def full_report(self, *, regon: str, report_name: str) -> list[dict[str, Any]]:
         # Wywołanie pozycyjne — druga nazwa parametru bywa różna w wersjach biblioteki.
-        return self._call("dataDownloadFullReport", regon, report_name) or []
+        # Bez filtrowania: /report jest udokumentowany jako surowy raport, więc
+        # komunikat błędu z GUS jest tam użyteczną informacją.
+        return self._call_checked("dataDownloadFullReport", regon, report_name) or []
 
     def entity_details(
         self,
@@ -95,7 +145,11 @@ class GusClient:
         report_name = pick_report_name(typ, silos_id, self._settings.bir_version)
         report_row: dict[str, Any] = {}
         if entity_regon:
-            report = self.full_report(regon=str(entity_regon), report_name=report_name)
+            # Rekord-błąd nie może tu wejść: nie ma dat, więc podmiot wyszedłby
+            # jako "aktywna" niezależnie od stanu faktycznego.
+            report = drop_error_rows(
+                self.full_report(regon=str(entity_regon), report_name=report_name)
+            )
             if report:
                 report_row = report[0]
 
@@ -106,11 +160,16 @@ class GusClient:
         return flat
 
     def ensure_session(self) -> dict[str, Any]:
-        """Wymusza (lub odświeża) zalogowanie i zwraca informacje konfiguracyjne.
-        Służy jako lekki 'readiness' check bez wywoływania danych GUS."""
+        """Sprawdza, czy sesja z GUS naprawdę żyje (a nie tylko czy obiekt klienta
+        istnieje). Gdy wygasła — loguje się ponownie."""
         self._get_api()
+        alive = self._session_alive()
+        if not alive:
+            self._get_api(force_new=True)
+            alive = self._session_alive()
         return {
-            "authenticated": True,
+            "authenticated": alive,
             "bir_version": self._settings.bir_version,
             "production": self._settings.production,
+            "session_age_seconds": int(time.monotonic() - self._authenticated_at),
         }

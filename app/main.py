@@ -11,13 +11,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from . import reports
 from .config import Settings, get_settings
-from .gus_client import GusClient
+from .gus_client import CALL_ERRORS, GusClient
 from .models import ReportResponse, SearchResponse
 
 _INDEX_HTML = (Path(__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
 
 # Znacznik wersji — pozwala potwierdzić, że kontener działa na aktualnym kodzie.
-APP_VERSION = "1.1.1-status"
+APP_VERSION = "1.2.1-session-recovery"
 
 # Jeden współdzielony klient (trzyma sesję GUS).
 _client: GusClient | None = None
@@ -70,7 +70,7 @@ def status(client: GusClient = Depends(get_client)):
     """Sprawdza, czy proxy potrafi zalogować się do GUS (readiness)."""
     try:
         return client.ensure_session()
-    except Exception as exc:  # noqa: BLE001
+    except CALL_ERRORS as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Błąd logowania do GUS: {exc}") from exc
 
 
@@ -120,7 +120,7 @@ def full_report(
 ):
     try:
         results = client.full_report(regon=regon, report_name=report_name)
-    except Exception as exc:  # noqa: BLE001
+    except CALL_ERRORS as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Błąd GUS: {exc}") from exc
     return ReportResponse(regon=regon, report_name=report_name, results=results)
 
@@ -128,7 +128,7 @@ def full_report(
 def _do_search(client: GusClient, **kwargs) -> SearchResponse:
     try:
         results = client.search(**kwargs)
-    except Exception as exc:  # noqa: BLE001
+    except CALL_ERRORS as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Błąd GUS: {exc}") from exc
     if not results:
         raise HTTPException(status_code=404, detail="Nie znaleziono podmiotu.")
@@ -159,7 +159,7 @@ def _csv_response(rows: list[dict], sep: str = ";") -> Response:
 def _entity_response(client: GusClient, ident: dict, raw: bool, fmt: str, sep: str):
     try:
         data = client.entity_details(**ident, include_raw=raw)
-    except Exception as exc:  # noqa: BLE001
+    except CALL_ERRORS as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Błąd GUS: {exc}") from exc
     if data is None:
         raise HTTPException(status_code=404, detail="Nie znaleziono podmiotu.")
@@ -224,7 +224,7 @@ def entities(
     for kind, value in idents:
         try:
             data = client.entity_details(**{kind: value})
-        except Exception as exc:  # noqa: BLE001
+        except CALL_ERRORS as exc:  # noqa: BLE001
             errors.append({"query": {kind: value}, "error": str(exc)})
             continue
         if data is None:
